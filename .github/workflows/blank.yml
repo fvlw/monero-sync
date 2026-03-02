@@ -3,10 +3,12 @@ name: Monero Node Data Pack
 on:
   workflow_dispatch:
 
+# 全局超时配置：6小时（360分钟），覆盖5小时运行+打包上传的全部耗时
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 360  # 核心：设置作业总超时为6小时，避免中途中断
+    
     steps:
       - name: Step 1 - 下载 Monero CLI 包
         run: |
@@ -18,17 +20,17 @@ jobs:
           cd /home/runner/
           tar -xjvf monero-linux-x64.tar.bz2
 
-      - name: Step 3 - 运行 monerod 节点 1 分钟（守护进程模式）
+      - name: Step 3 - 运行 monerod 节点 5 小时（守护进程模式）
         run: |
           # 创建日志和数据目录，确保权限
           mkdir -p /home/runner/monero-logs /home/runner/mm
           cd /home/runner/monero-x86_64-linux-gnu-v0.18.4.5/
           
-          # 1. 先停止可能残留的 monerod 进程（避免冲突）
+          # 1. 清理残留进程，避免冲突
           pkill -f monerod 2>/dev/null || true
           sleep 2
           
-          # 2. 启动 monerod 守护进程，重定向输入输出
+          # 2. 启动 monerod 守护进程，脱离终端运行
           ./monerod --detach \
             --data-dir=/home/runner/mm \
             --out-peers 32 --in-peers 64 \
@@ -38,10 +40,10 @@ jobs:
             --log-file=/home/runner/monero-logs/monerod.log \
             < /dev/null > /dev/null 2>&1
           
-          # 3. 等待进程完全启动（延长等待时间到 5 秒，确保加载完成）
+          # 3. 等待进程完全启动
           sleep 5
           
-          # 4. 宽松匹配获取 PID（只匹配 monerod 进程名，不限制参数）
+          # 4. 获取运行的 PID
           MONEROD_PID=$(pgrep monerod || echo "0")
           
           if [ "$MONEROD_PID" = "0" ]; then
@@ -51,48 +53,51 @@ jobs:
           fi
           
           echo "✅ monerod 启动成功，PID: $MONEROD_PID"
-          echo "📝 进程状态检查："
           ps -ef | grep monerod | grep -v grep
           
-          # 5. 等待 1 分钟（60 秒）让进程运行
-          echo "⏳ 让 monerod 运行 1 分钟..."
-          sleep 60
+          # 5. 运行 5 小时（18000 秒）
+          echo "⏳ 让 monerod 运行 5 小时..."
+          sleep 18000
           
           # 6. 优雅终止进程
           if ps -p $MONEROD_PID > /dev/null; then
             echo "🛑 终止 monerod 进程 (PID: $MONEROD_PID)"
             kill $MONEROD_PID
             sleep 5
-            # 强制终止（如果仍存活）
-            if ps -p $MONEROD_PID > /dev/null; then
-              kill -9 $MONEROD_PID 2>/dev/null || true
-            fi
+            kill -9 $MONEROD_PID 2>/dev/null || true
           else
-            echo "⚠️ monerod 进程 (PID: $MONEROD_PID) 已自行退出，日志末尾："
+            echo "⚠️ monerod 进程已自行退出，日志末尾："
             tail -50 /home/runner/monero-logs/monerod.log
           fi
 
-      - name: Step 4 - 打包数据目录
+      - name: Step 4 - 单文件压缩 mm 目录（xz 格式）
         run: |
           cd /home/runner/
-          # 检查目录是否存在，避免打包失败
-          if [ -d "/home/runner/mm" ]; then
-            tar -cJf mm.xz /home/runner/mm
-            echo "✅ 打包完成：mm.xz"
+          # 检查目录是否存在
+          if [ -d "./mm" ]; then
+            echo "📊 数据目录大小："
+            du -sh ./mm
+            echo "📝 开始压缩为单个 mm.xz 文件..."
+            
+            # 单文件 xz 压缩（保留原格式，取消分卷）
+            tar -cJf mm.xz ./mm
+            
+            echo "✅ 压缩完成，文件信息："
             ls -lh mm.xz
           else
-            echo "❌ 数据目录 /home/runner/mm 不存在！"
+            echo "❌ 数据目录 ./mm 不存在！"
             exit 1
           fi
 
-      - name: Step 5 - 上传 mm.xz 文件
+      - name: Step 5 - 上传 mm.xz 单个文件
         uses: actions/upload-artifact@v4
         with:
           name: monero-node-data
-          path: /home/runner/mm.xz
+          path: /home/runner/mm.xz  # 单文件路径，无需通配符
           retention-days: 7
+          if-no-files-found: error  # 无文件时直接报错，便于排查
           
-      - name: 上传 monerod 日志（用于排查）
+      - name: 上传 monerod 日志（排查用）
         uses: actions/upload-artifact@v4
         with:
           name: monerod-logs
