@@ -1,29 +1,56 @@
-name: Check Download Path
-on: workflow_dispatch
+name: Monero Node Data Pack
+
+# 触发条件：可以根据需要修改，比如 push 到 main 分支，或手动触发
+on:
+  workflow_dispatch:  # 手动触发
+  # push:
+  #   branches: [ main ]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  build-and-upload:
+    runs-on: ubuntu-latest  # 使用 Ubuntu 最新版 runner
+
     steps:
-      - name: 查看默认工作目录
+      - name: Step 1 - 下载 Monero CLI 包
         run: |
-          # 打印当前工作目录
-          pwd
-          # 打印工作目录的环境变量（GitHub 内置）
-          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          cd /home/runner/
+          # 下载指定版本的 Monero CLI，添加超时和重试机制
+          curl --retry 3 --connect-timeout 30 -L -o monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
 
-      - name: 方式1：默认目录下载
+      - name: Step 2 - 解压 Monero 包
         run: |
-          # 在默认目录下载
-          curl -L -o monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
-          # 验证文件位置
-          ls -l $GITHUB_WORKSPACE/monero-linux-x64.tar.bz2
+          cd /home/runner/
+          # 解压文件，显示解压过程
+          tar -xjvf monero-linux-x64.tar.bz2
 
-      - name: 方式2：指定绝对路径下载（推荐，避免路径混乱）
+      - name: Step 3 - 运行 monerod 节点 1 分钟
         run: |
-          # 创建固定目录
-          mkdir -p /home/runner/monero_download
-          # 直接指定绝对路径下载，无需关心当前目录
-          curl -L -o /home/runner/monero_download/monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
-          # 验证文件位置
-          ls -l /home/runner/monero_download/monero-linux-x64.tar.bz2
+          cd /home/runner/monero-x86_64-linux-gnu-v0.18.4.5/
+          # 启动 monerod 并后台运行，记录进程 ID
+          ./monerod --data-dir=/home/runner/mm --out-peers 32 --in-peers 64 \
+            --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
+            --add-priority-node=nodes.hashvault.pro:18080 \
+            --enforce-dns-checkpointing --enable-dns-blocklist --prune-blockchain &
+          MONEROD_PID=$!
+          
+          # 等待 1 分钟（60 秒）
+          sleep 60
+          
+          # 终止 monerod 进程
+          kill $MONEROD_PID
+          # 确保进程被彻底终止
+          sleep 5
+          kill -9 $MONEROD_PID 2>/dev/null || true
+
+      - name: Step 4 - 打包数据目录
+        run: |
+          cd /home/runner/
+          # 使用 xz 压缩 mm 目录，生成 mm.xz
+          tar -cJf mm.xz /home/runner/mm
+
+      - name: Step 5 - 上传 mm.xz 文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: monero-node-data
+          path: /home/runner/mm.xz
+          retention-days: 7  # 保留 7 天，可根据需要修改
