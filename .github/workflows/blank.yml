@@ -1,84 +1,65 @@
-name: Build Monero Node Data
+name: Monero Data Build and Upload
 
-# 触发条件：可以根据需要修改，比如手动触发、定时触发或推送触发
+# 触发条件：可以根据你的需求修改，比如手动触发、push 触发等
 on:
   workflow_dispatch:  # 手动触发
-  # schedule:
-  #   - cron: '0 0 * * *'  # 每天 UTC 0 点触发（可选）
 
-# 设置工作流权限
-permissions:
-  contents: write  # 用于上传 artifact
-
+# 配置运行环境
 jobs:
-  build-monero-data:
-    runs-on: ubuntu-latest  # 使用 Ubuntu 最新版环境
-    timeout-minutes: 10  # 设置超时时间，防止无限运行
-
+  build-and-upload:
+    runs-on: ubuntu-latest  # 使用 Ubuntu 最新版 runner
     steps:
-      - name: Step 1 - Download Monero CLI
+      - name: 切换到 root 用户并下载 monero 包
         run: |
+          # GitHub Actions 默认已经是 root 权限，无需 sudo -i
+          cd /root
+          # 下载 monero CLI 包
           curl -L -o monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
-          # 验证下载文件是否存在，防止下载失败
+          # 验证下载文件是否存在（可选，增加健壮性）
           if [ ! -f "monero-linux-x64.tar.bz2" ]; then
-            echo "Error: Monero CLI download failed!"
+            echo "下载 monero 包失败"
             exit 1
           fi
 
-      - name: Step 2 - Extract Monero archive
+      - name: 解压 monero 包
         run: |
-          tar -xjvf monero-linux-x64.tar.bz2 -C /home
-          # 检查解压后的目录是否存在（适配不同版本号）
-          MONERO_DIR=$(ls -d /home/monero-x86_64-linux-gnu-v* | head -n 1)
-          if [ -z "$MONERO_DIR" ]; then
-            echo "Error: Monero directory not found!"
-            exit 1
-          fi
-          echo "MONERO_DIR=$MONERO_DIR" >> $GITHUB_ENV  # 保存目录路径到环境变量
+          cd /root
+          tar -xjvf monero-linux-x64.tar.bz2
+          # 查找解压后的目录（适配版本号变化）
+          MONERO_DIR=$(find /root -maxdepth 1 -type d -name "monero-x86_64-linux-gnu-v*" | head -n 1)
+          echo "MONERO_DIR=$MONERO_DIR" >> $GITHUB_ENV
 
-      - name: Step 3 & 4 - Run monerod for 1 minute
+      - name: 运行 monerod 进程 1 分钟
         run: |
-          # 创建数据目录
-          mkdir -p /mnt/mm
-          
-          # 进入 Monero 目录并启动节点（后台运行）
           cd ${{ env.MONERO_DIR }}
-          ./monerod --data-dir=/mnt/mm \
-            --out-peers 32 \
-            --in-peers 64 \
+          # 后台运行 monerod
+          ./monerod --data-dir=/root/mm --out-peers 32 --in-peers 64 \
             --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
             --add-priority-node=nodes.hashvault.pro:18080 \
-            --enforce-dns-checkpointing \
-            --enable-dns-blocklist \
-            --prune-blockchain &
-          
+            --enforce-dns-checkpointing --enable-dns-blocklist --prune-blockchain &
           # 记录进程 ID
           MONEROD_PID=$!
-          echo "Monerod PID: $MONEROD_PID"
-          
+          echo "MONEROD_PID=$MONEROD_PID" >> $GITHUB_ENV
           # 等待 1 分钟（60 秒）
           sleep 60
-          
           # 终止 monerod 进程
           kill $MONEROD_PID
-          # 等待进程退出，确保数据写入完成
+          # 等待进程彻底退出
           wait $MONEROD_PID 2>/dev/null || true
-          echo "Monerod process stopped"
 
-      - name: Step 5 - Compress data directory
+      - name: 打包 mm 目录
         run: |
-          tar -cJf mm.xz /mnt/mm
-          # 验证压缩文件是否生成
+          cd /root
+          tar -cJf mm.xz /root/mm
+          # 验证打包文件是否存在
           if [ ! -f "mm.xz" ]; then
-            echo "Error: mm.xz compression failed!"
+            echo "打包 mm 目录失败"
             exit 1
           fi
-          # 显示文件大小，确认文件有效
-          ls -lh mm.xz
 
-      - name: Step 6 - Upload mm.xz artifact
+      - name: 上传 mm.xz 文件
         uses: actions/upload-artifact@v4
         with:
-          name: monero-node-data
-          path: mm.xz
-          retention-days: 7  # 保留 7 天，可根据需要调整
+          name: monero-mm-data
+          path: /root/mm.xz
+          retention-days: 7  # 保留 7 天，可根据需求修改
