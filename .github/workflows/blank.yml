@@ -1,85 +1,84 @@
-name: Monero Data Packer
+name: Build Monero Node Data
 
-# 触发条件：可以根据需要修改，比如手动触发、定时触发或代码推送触发
+# 触发条件：可以根据需要修改，比如手动触发、定时触发或推送触发
 on:
   workflow_dispatch:  # 手动触发
   # schedule:
-  #   - cron: '0 0 * * *'  # 每天 UTC 时间 0 点运行（可选）
+  #   - cron: '0 0 * * *'  # 每天 UTC 0 点触发（可选）
 
 # 设置工作流权限
 permissions:
-  contents: write  # 用于上传文件
+  contents: write  # 用于上传 artifact
 
 jobs:
-  build-and-pack:
-    runs-on: ubuntu-latest  # 使用 Ubuntu 最新版运行环境
-    
+  build-monero-data:
+    runs-on: ubuntu-latest  # 使用 Ubuntu 最新版环境
+    timeout-minutes: 10  # 设置超时时间，防止无限运行
+
     steps:
       - name: Step 1 - Download Monero CLI
         run: |
           curl -L -o monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
-          # 验证下载文件是否成功
+          # 验证下载文件是否存在，防止下载失败
           if [ ! -f "monero-linux-x64.tar.bz2" ]; then
-            echo "下载 Monero CLI 失败"
+            echo "Error: Monero CLI download failed!"
             exit 1
           fi
 
       - name: Step 2 - Extract Monero archive
         run: |
-          tar -xjvf monero-linux-x64.tar.bz2
-          # 查看解压后的目录名称（通常是 monero-linux-x64-v* 格式）
-          MONERO_DIR=$(ls -d monero-linux-x64-*)
-          echo "解压后的目录: $MONERO_DIR"
-          echo "MONERO_DIR=$MONERO_DIR" >> $GITHUB_ENV  # 保存目录名到环境变量
+          tar -xjvf monero-linux-x64.tar.bz2 -C /home
+          # 检查解压后的目录是否存在（适配不同版本号）
+          MONERO_DIR=$(ls -d /home/monero-x86_64-linux-gnu-v* | head -n 1)
+          if [ -z "$MONERO_DIR" ]; then
+            echo "Error: Monero directory not found!"
+            exit 1
+          fi
+          echo "MONERO_DIR=$MONERO_DIR" >> $GITHUB_ENV  # 保存目录路径到环境变量
 
-      - name: Step 3 & 4 - Create dir and run monerod
+      - name: Step 3 & 4 - Run monerod for 1 minute
         run: |
           # 创建数据目录
-          sudo mkdir -p /mnt/mm
-          sudo chmod 777 /mnt/mm  # 赋予读写权限
+          mkdir -p /mnt/mm
           
-          # 进入解压目录并运行 monerod
-          cd $MONERO_DIR
-          echo "开始运行 monerod，持续 1 分钟..."
-          # 后台运行 monerod 并记录进程 ID
+          # 进入 Monero 目录并启动节点（后台运行）
+          cd ${{ env.MONERO_DIR }}
           ./monerod --data-dir=/mnt/mm \
-                    --out-peers 32 \
-                    --in-peers 64 \
-                    --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
-                    --add-priority-node=nodes.hashvault.pro:18080 \
-                    --enforce-dns-checkpointing \
-                    --enable-dns-blocklist \
-                    --prune-blockchain &
+            --out-peers 32 \
+            --in-peers 64 \
+            --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
+            --add-priority-node=nodes.hashvault.pro:18080 \
+            --enforce-dns-checkpointing \
+            --enable-dns-blocklist \
+            --prune-blockchain &
+          
+          # 记录进程 ID
           MONEROD_PID=$!
+          echo "Monerod PID: $MONEROD_PID"
           
           # 等待 1 分钟（60 秒）
           sleep 60
           
           # 终止 monerod 进程
-          echo "终止 monerod 进程 (PID: $MONEROD_PID)"
           kill $MONEROD_PID
-          # 确保进程被终止
-          sleep 5
-          if ps -p $MONEROD_PID > /dev/null; then
-            kill -9 $MONEROD_PID
-          fi
+          # 等待进程退出，确保数据写入完成
+          wait $MONEROD_PID 2>/dev/null || true
+          echo "Monerod process stopped"
 
       - name: Step 5 - Compress data directory
         run: |
-          # 打包 /mnt/mm 目录为 mm.xz
-          echo "开始打包 /mnt/mm 目录..."
           tar -cJf mm.xz /mnt/mm
-          # 验证打包文件
-          if [ -f "mm.xz" ]; then
-            echo "打包成功，文件大小：$(du -h mm.xz | awk '{print $1}')"
-          else
-            echo "打包失败"
+          # 验证压缩文件是否生成
+          if [ ! -f "mm.xz" ]; then
+            echo "Error: mm.xz compression failed!"
             exit 1
           fi
+          # 显示文件大小，确认文件有效
+          ls -lh mm.xz
 
-      - name: Step 6 - Upload mm.xz file
+      - name: Step 6 - Upload mm.xz artifact
         uses: actions/upload-artifact@v4
         with:
-          name: monero-data
+          name: monero-node-data
           path: mm.xz
-          retention-days: 7  # 文件保留 7 天，可根据需要修改
+          retention-days: 7  # 保留 7 天，可根据需要调整
