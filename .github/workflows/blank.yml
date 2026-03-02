@@ -1,65 +1,29 @@
-name: Monero Data Build and Upload
+name: Check Download Path
+on: workflow_dispatch
 
-# 触发条件：可以根据你的需求修改，比如手动触发、push 触发等
-on:
-  workflow_dispatch:  # 手动触发
-
-# 配置运行环境
 jobs:
-  build-and-upload:
-    runs-on: ubuntu-latest  # 使用 Ubuntu 最新版 runner
+  test:
+    runs-on: ubuntu-latest
     steps:
-      - name: 切换到 root 用户并下载 monero 包
+      - name: 查看默认工作目录
         run: |
-          # GitHub Actions 默认已经是 root 权限，无需 sudo -i
-          cd /root
-          # 下载 monero CLI 包
+          # 打印当前工作目录
+          pwd
+          # 打印工作目录的环境变量（GitHub 内置）
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+
+      - name: 方式1：默认目录下载
+        run: |
+          # 在默认目录下载
           curl -L -o monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
-          # 验证下载文件是否存在（可选，增加健壮性）
-          if [ ! -f "monero-linux-x64.tar.bz2" ]; then
-            echo "下载 monero 包失败"
-            exit 1
-          fi
+          # 验证文件位置
+          ls -l $GITHUB_WORKSPACE/monero-linux-x64.tar.bz2
 
-      - name: 解压 monero 包
+      - name: 方式2：指定绝对路径下载（推荐，避免路径混乱）
         run: |
-          cd /root
-          tar -xjvf monero-linux-x64.tar.bz2
-          # 查找解压后的目录（适配版本号变化）
-          MONERO_DIR=$(find /root -maxdepth 1 -type d -name "monero-x86_64-linux-gnu-v*" | head -n 1)
-          echo "MONERO_DIR=$MONERO_DIR" >> $GITHUB_ENV
-
-      - name: 运行 monerod 进程 1 分钟
-        run: |
-          cd ${{ env.MONERO_DIR }}
-          # 后台运行 monerod
-          ./monerod --data-dir=/root/mm --out-peers 32 --in-peers 64 \
-            --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
-            --add-priority-node=nodes.hashvault.pro:18080 \
-            --enforce-dns-checkpointing --enable-dns-blocklist --prune-blockchain &
-          # 记录进程 ID
-          MONEROD_PID=$!
-          echo "MONEROD_PID=$MONEROD_PID" >> $GITHUB_ENV
-          # 等待 1 分钟（60 秒）
-          sleep 60
-          # 终止 monerod 进程
-          kill $MONEROD_PID
-          # 等待进程彻底退出
-          wait $MONEROD_PID 2>/dev/null || true
-
-      - name: 打包 mm 目录
-        run: |
-          cd /root
-          tar -cJf mm.xz /root/mm
-          # 验证打包文件是否存在
-          if [ ! -f "mm.xz" ]; then
-            echo "打包 mm 目录失败"
-            exit 1
-          fi
-
-      - name: 上传 mm.xz 文件
-        uses: actions/upload-artifact@v4
-        with:
-          name: monero-mm-data
-          path: /root/mm.xz
-          retention-days: 7  # 保留 7 天，可根据需求修改
+          # 创建固定目录
+          mkdir -p /home/runner/monero_download
+          # 直接指定绝对路径下载，无需关心当前目录
+          curl -L -o /home/runner/monero_download/monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
+          # 验证文件位置
+          ls -l /home/runner/monero_download/monero-linux-x64.tar.bz2
