@@ -6,7 +6,7 @@ on:
 jobs:
   monero-job:
     runs-on: ubuntu-latest
-    timeout-minutes: 5  # 适配1分钟运行的超时时间
+    timeout-minutes: 30  # 延长超时时间到30分钟（适配压缩耗时）
     
     steps:
       - name: 1. 下载 Monero CLI 安装包
@@ -88,26 +88,38 @@ jobs:
           echo "monerod 进程已终止，运行日志："
           cat monerod.log
 
-      - name: 4. 压缩数据目录为 mm.xz（默认单线程）
+      - name: 4. 安装多线程压缩工具并压缩数据目录
         shell: /usr/bin/bash -e {0}
         run: |
-          # 恢复默认单线程压缩（移除多线程环境变量）
+          # 安装多线程压缩工具（提升压缩速度）
+          sudo apt update && sudo apt install -y pixz pv
+          
+          # 定义数据目录
           MONERO_DATA_DIR=$HOME/monero-mm-data
-          echo "开始压缩数据目录：$MONERO_DATA_DIR（默认单线程）"
-          tar -cJvf mm.xz $MONERO_DATA_DIR
+          COMPRESSED_FILE=$HOME/monero-work/mm.xz
+          
+          # 显示数据目录大小（便于排查）
+          echo "数据目录大小："
+          du -sh $MONERO_DATA_DIR
+          
+          # 使用多线程压缩（pixz）+ 进度显示（pv）
+          echo "开始多线程压缩数据目录：$MONERO_DATA_DIR"
+          cd $HOME/monero-work
+          tar -cf - $MONERO_DATA_DIR | pv -s $(du -sb $MONERO_DATA_DIR | awk '{print $1}') | pixz -9 -t 4 -o $COMPRESSED_FILE
           
           # 验证压缩包
-          if [ ! -f "mm.xz" ]; then
+          if [ ! -f "$COMPRESSED_FILE" ]; then
             echo "错误：压缩文件生成失败"
             exit 1
           fi
-          # 显示文件大小
-          ls -lh mm.xz
-          echo "压缩完成，文件：mm.xz"
+          
+          # 显示压缩文件信息
+          ls -lh $COMPRESSED_FILE
+          echo "压缩完成，文件：$COMPRESSED_FILE"
 
       - name: 5. 上传 mm.xz 文件
         uses: actions/upload-artifact@v4
         with:
           name: monero-mm-data
-          path: mm.xz
+          path: $HOME/monero-work/mm.xz
           retention-days: 7  # 保留 7 天
