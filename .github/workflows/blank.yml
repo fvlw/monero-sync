@@ -18,40 +18,50 @@ jobs:
           cd /home/runner/
           tar -xjvf monero-linux-x64.tar.bz2
 
-      - name: Step 3 - 运行 monerod 节点 1 分钟
+      - name: Step 3 - 运行 monerod 节点 1 分钟（守护进程模式）
         run: |
-          # 创建日志目录
-          mkdir -p /home/runner/monero-logs
+          # 创建日志和数据目录，确保权限
+          mkdir -p /home/runner/monero-logs /home/runner/mm
           cd /home/runner/monero-x86_64-linux-gnu-v0.18.4.5/
           
-          # 启动 monerod，后台运行并记录日志和 PID
-          ./monerod --data-dir=/home/runner/mm --out-peers 32 --in-peers 64 \
+          # 关键修复：添加 --detach（守护进程）+ 重定向 stdin/stdout/stderr
+          ./monerod --detach \
+            --data-dir=/home/runner/mm \
+            --out-peers 32 --in-peers 64 \
             --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
             --add-priority-node=nodes.hashvault.pro:18080 \
             --enforce-dns-checkpointing --enable-dns-blocklist --prune-blockchain \
-            --log-file=/home/runner/monero-logs/monerod.log &
-          MONEROD_PID=$!
-          echo "Monerod 启动，PID: $MONEROD_PID"
+            --log-file=/home/runner/monero-logs/monerod.log \
+            < /dev/null > /dev/null 2>&1
+          
+          # 等待 2 秒让进程完全启动，获取 PID
+          sleep 2
+          MONEROD_PID=$(pgrep -f "monerod --data-dir=/home/runner/mm" || echo "0")
+          
+          if [ "$MONEROD_PID" = "0" ]; then
+            echo "错误：monerod 进程启动失败！"
+            cat /home/runner/monero-logs/monerod.log || echo "无日志文件"
+            exit 1
+          fi
+          
+          echo "monerod 启动成功，PID: $MONEROD_PID"
           
           # 等待 1 分钟（60 秒）
           sleep 60
           
-          # 检查进程是否还存在，存在才终止
+          # 优雅终止进程
           if ps -p $MONEROD_PID > /dev/null; then
             echo "终止 monerod 进程 (PID: $MONEROD_PID)"
             kill $MONEROD_PID
             sleep 5
-            # 再次检查，若仍存在则强制终止
+            # 强制终止（如果仍存活）
             if ps -p $MONEROD_PID > /dev/null; then
               kill -9 $MONEROD_PID 2>/dev/null || true
             fi
           else
-            echo "monerod 进程 (PID: $MONEROD_PID) 已自行退出，无需终止"
+            echo "monerod 进程 (PID: $MONEROD_PID) 已自行退出，检查日志："
+            tail -50 /home/runner/monero-logs/monerod.log
           fi
-          
-          # 打印日志末尾内容，方便排查问题
-          echo "=== Monerod 日志末尾 50 行 ==="
-          tail -50 /home/runner/monero-logs/monerod.log || echo "日志文件不存在"
 
       - name: Step 4 - 打包数据目录
         run: |
@@ -65,7 +75,7 @@ jobs:
           path: /home/runner/mm.xz
           retention-days: 7
           
-      - name: 上传 monerod 日志（用于排查问题）
+      - name: 上传 monerod 日志（用于排查）
         uses: actions/upload-artifact@v4
         with:
           name: monerod-logs
