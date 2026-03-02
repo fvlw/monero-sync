@@ -6,7 +6,7 @@ on:
 jobs:
   monero-job:
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # 预留足够超时时间
+    timeout-minutes: 5  # 适配1分钟运行的超时时间
     
     steps:
       - name: 1. 下载 Monero CLI 安装包
@@ -40,48 +40,60 @@ jobs:
           fi
           echo "Monero 解压完成，目录：${{ env.MONERO_DIR }}"
 
-      - name: 3. 运行 monerod 进程 5 分钟
+      - name: 3. 运行 monerod 进程 1 分钟
         shell: /usr/bin/bash -e {0}
         env:
           MONERO_DIR: monero-x86_64-linux-gnu-v0.18.4.5/
         run: |
           cd $HOME/monero-work/${{ env.MONERO_DIR }}
           
-          # 关键修复：使用当前用户有权限的目录（替代/root/mm）
+          # 使用当前用户有权限的目录（替代/root/mm）
           MONERO_DATA_DIR=$HOME/monero-mm-data
           mkdir -p $MONERO_DATA_DIR
           echo "创建数据目录：$MONERO_DATA_DIR"
           
-          # 后台运行 monerod 进程，并记录 PID
+          # 启动 monerod 进程（修复EOF退出问题）
           echo "启动 monerod 进程..."
-          ./monerod --data-dir=$MONERO_DATA_DIR \
+          nohup ./monerod --data-dir=$MONERO_DATA_DIR \
             --out-peers 32 \
             --in-peers 64 \
             --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
             --add-priority-node=nodes.hashvault.pro:18080 \
             --enforce-dns-checkpointing \
             --enable-dns-blocklist \
-            --prune-blockchain > monerod.log 2>&1 &
+            --prune-blockchain \
+            --non-interactive \
+            < /dev/null > monerod.log 2>&1 &
           MONEROD_PID=$!
           echo "monerod 进程 PID：$MONEROD_PID"
           
-          # 运行 5 分钟（300 秒）
-          echo "等待 5 分钟（300 秒）..."
-          sleep 300
+          # 验证进程是否启动成功
+          sleep 5
+          if ps -p $MONEROD_PID > /dev/null; then
+            echo "monerod 进程启动成功，开始运行 1 分钟..."
+          else
+            echo "错误：monerod 进程启动失败，日志内容："
+            cat monerod.log
+            exit 1
+          fi
+          
+          # 运行 1 分钟（60 秒）
+          sleep 60
           
           # 终止 monerod 进程
           echo "终止 monerod 进程..."
           kill $MONEROD_PID || true
+          # 等待进程彻底退出
           sleep 5
           echo "monerod 进程已终止，运行日志："
           cat monerod.log
 
-      - name: 4. 压缩数据目录为 mm.xz
+      - name: 4. 压缩数据目录为 mm.xz（默认单线程）
         shell: /usr/bin/bash -e {0}
         run: |
-          # 压缩有权限的目录（替代/root/mm）
+          # 恢复默认单线程压缩（移除多线程环境变量）
           MONERO_DATA_DIR=$HOME/monero-mm-data
-          echo "开始压缩数据目录：$MONERO_DATA_DIR"
+          echo "开始压缩数据目录：$MONERO_DATA_DIR（默认单线程）"
           tar -cJvf mm.xz $MONERO_DATA_DIR
           
           # 验证压缩包
