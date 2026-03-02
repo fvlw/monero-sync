@@ -24,7 +24,11 @@ jobs:
           mkdir -p /home/runner/monero-logs /home/runner/mm
           cd /home/runner/monero-x86_64-linux-gnu-v0.18.4.5/
           
-          # 关键修复：添加 --detach（守护进程）+ 重定向 stdin/stdout/stderr
+          # 1. 先停止可能残留的 monerod 进程（避免冲突）
+          pkill -f monerod 2>/dev/null || true
+          sleep 2
+          
+          # 2. 启动 monerod 守护进程，重定向输入输出
           ./monerod --detach \
             --data-dir=/home/runner/mm \
             --out-peers 32 --in-peers 64 \
@@ -34,9 +38,11 @@ jobs:
             --log-file=/home/runner/monero-logs/monerod.log \
             < /dev/null > /dev/null 2>&1
           
-          # 等待 2 秒让进程完全启动，获取 PID
-          sleep 2
-          MONEROD_PID=$(pgrep -f "monerod --data-dir=/home/runner/mm" || echo "0")
+          # 3. 等待进程完全启动（延长等待时间到 5 秒，确保加载完成）
+          sleep 5
+          
+          # 4. 宽松匹配获取 PID（只匹配 monerod 进程名，不限制参数）
+          MONEROD_PID=$(pgrep monerod || echo "0")
           
           if [ "$MONEROD_PID" = "0" ]; then
             echo "错误：monerod 进程启动失败！"
@@ -44,14 +50,17 @@ jobs:
             exit 1
           fi
           
-          echo "monerod 启动成功，PID: $MONEROD_PID"
+          echo "✅ monerod 启动成功，PID: $MONEROD_PID"
+          echo "📝 进程状态检查："
+          ps -ef | grep monerod | grep -v grep
           
-          # 等待 1 分钟（60 秒）
+          # 5. 等待 1 分钟（60 秒）让进程运行
+          echo "⏳ 让 monerod 运行 1 分钟..."
           sleep 60
           
-          # 优雅终止进程
+          # 6. 优雅终止进程
           if ps -p $MONEROD_PID > /dev/null; then
-            echo "终止 monerod 进程 (PID: $MONEROD_PID)"
+            echo "🛑 终止 monerod 进程 (PID: $MONEROD_PID)"
             kill $MONEROD_PID
             sleep 5
             # 强制终止（如果仍存活）
@@ -59,14 +68,22 @@ jobs:
               kill -9 $MONEROD_PID 2>/dev/null || true
             fi
           else
-            echo "monerod 进程 (PID: $MONEROD_PID) 已自行退出，检查日志："
+            echo "⚠️ monerod 进程 (PID: $MONEROD_PID) 已自行退出，日志末尾："
             tail -50 /home/runner/monero-logs/monerod.log
           fi
 
       - name: Step 4 - 打包数据目录
         run: |
           cd /home/runner/
-          tar -cJf mm.xz /home/runner/mm
+          # 检查目录是否存在，避免打包失败
+          if [ -d "/home/runner/mm" ]; then
+            tar -cJf mm.xz /home/runner/mm
+            echo "✅ 打包完成：mm.xz"
+            ls -lh mm.xz
+          else
+            echo "❌ 数据目录 /home/runner/mm 不存在！"
+            exit 1
+          fi
 
       - name: Step 5 - 上传 mm.xz 文件
         uses: actions/upload-artifact@v4
