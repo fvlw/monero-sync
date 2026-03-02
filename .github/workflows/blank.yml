@@ -6,13 +6,14 @@ on:
 jobs:
   monero-job:
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # 预留足够超时时间（覆盖5分钟运行+其他步骤）
+    timeout-minutes: 15  # 预留足够超时时间
     
     steps:
       - name: 1. 下载 Monero CLI 安装包
+        shell: /usr/bin/bash -e {0}
         run: |
-          # 创建工作目录并下载文件
-          mkdir -p ~/monero-work && cd ~/monero-work
+          # 创建工作目录（使用当前用户有权限的路径）
+          mkdir -p $HOME/monero-work && cd $HOME/monero-work
           curl -L -o monero-linux-x64.tar.bz2 https://downloads.getmonero.org/cli/linux64
           
           # 验证下载文件是否存在
@@ -23,33 +24,37 @@ jobs:
           echo "Monero 安装包下载完成"
 
       - name: 2. 解压 Monero CLI 安装包
+        shell: /usr/bin/bash -e {0}
+        env:
+          MONERO_DIR: monero-x86_64-linux-gnu-v0.18.4.5/
         run: |
-          cd ~/monero-work
+          cd $HOME/monero-work
           # 解压文件
           tar -xjvf monero-linux-x64.tar.bz2
           
-          # 自动识别解压后的目录（兼容不同版本号）
-          MONERO_DIR=$(ls -d monero-x86_64-linux-gnu-*/ | head -n1)
-          echo "识别到 Monero 目录：$MONERO_DIR"
-          echo "MONERO_DIR=$MONERO_DIR" >> $GITHUB_ENV  # 保存到环境变量供后续使用
-          
-          # 验证解压结果
-          if [ ! -d "$MONERO_DIR" ]; then
-            echo "错误：Monero 解压失败"
+          # 验证解压目录是否存在
+          if [ ! -d "${{ env.MONERO_DIR }}" ]; then
+            echo "错误：Monero 解压目录不存在，实际目录："
+            ls -d monero-*
             exit 1
           fi
-          echo "Monero 解压完成"
+          echo "Monero 解压完成，目录：${{ env.MONERO_DIR }}"
 
       - name: 3. 运行 monerod 进程 5 分钟
+        shell: /usr/bin/bash -e {0}
+        env:
+          MONERO_DIR: monero-x86_64-linux-gnu-v0.18.4.5/
         run: |
-          cd ~/monero-work/${{ env.MONERO_DIR }}
+          cd $HOME/monero-work/${{ env.MONERO_DIR }}
           
-          # 创建数据目录
-          mkdir -p /root/mm
+          # 关键修复：使用当前用户有权限的目录（替代/root/mm）
+          MONERO_DATA_DIR=$HOME/monero-mm-data
+          mkdir -p $MONERO_DATA_DIR
+          echo "创建数据目录：$MONERO_DATA_DIR"
           
           # 后台运行 monerod 进程，并记录 PID
           echo "启动 monerod 进程..."
-          ./monerod --data-dir=/root/mm \
+          ./monerod --data-dir=$MONERO_DATA_DIR \
             --out-peers 32 \
             --in-peers 64 \
             --add-priority-node=p2pmd.xmrvsbeast.com:18080 \
@@ -67,16 +72,17 @@ jobs:
           # 终止 monerod 进程
           echo "终止 monerod 进程..."
           kill $MONEROD_PID || true
-          # 等待进程彻底退出
           sleep 5
           echo "monerod 进程已终止，运行日志："
           cat monerod.log
 
-      - name: 4. 压缩 /root/mm 目录为 mm.xz
+      - name: 4. 压缩数据目录为 mm.xz
+        shell: /usr/bin/bash -e {0}
         run: |
-          # 压缩目录，使用高压缩级别，显示进度
-          echo "开始压缩 /root/mm 目录..."
-          tar -cJvf mm.xz /root/mm
+          # 压缩有权限的目录（替代/root/mm）
+          MONERO_DATA_DIR=$HOME/monero-mm-data
+          echo "开始压缩数据目录：$MONERO_DATA_DIR"
+          tar -cJvf mm.xz $MONERO_DATA_DIR
           
           # 验证压缩包
           if [ ! -f "mm.xz" ]; then
@@ -92,4 +98,4 @@ jobs:
         with:
           name: monero-mm-data
           path: mm.xz
-          retention-days: 7  # 保留 7 天，可根据需要调整
+          retention-days: 7  # 保留 7 天
