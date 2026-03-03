@@ -6,7 +6,7 @@ on:
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 240  # 总超时设为4小时（2小时运行+上传冗余）
+    timeout-minutes: 240  # 总超时设为4小时
     
     steps:
       - name: Step 1 - 下载 Monero CLI 包
@@ -19,38 +19,47 @@ jobs:
           cd /home/runner/
           tar -xjvf monero-linux-x64.tar.bz2
 
-      - name: Step 3 - 下载并解压指定 monero-sync artifacts 包
+      - name: Step 3 - 安装 GitHub CLI 并下载指定 artifacts
         run: |
           cd /home/runner/
-          # 定义下载链接和文件名
-          ARTIFACT_URL="https://github.com/fvlw/monero-sync/actions/runs/22612485345/artifacts/5738145565"
-          ARTIFACT_FILE="monero-sync-artifact.zip"
+          # 1. 安装 GitHub CLI（gh）- GitHub 官方工具，支持正确下载 artifacts
+          type -p gh >/dev/null || (sudo apt update && sudo apt install -y gh)
           
-          # 下载 artifacts 包（添加重试和超时，适配 GitHub Actions 网络）
+          # 2. 下载指定 artifacts（关键：用 gh 替代 curl，处理跳转/权限）
+          # 参数说明：
+          #   repo: 仓库名（fvlw/monero-sync）
+          #   run-id: 运行ID（22612485345）
+          #   artifact-id: 制品ID（5738145565）
           echo "📥 开始下载 monero-sync artifacts 包..."
-          curl --retry 3 --connect-timeout 30 -L -o "$ARTIFACT_FILE" "$ARTIFACT_URL"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            /repos/fvlw/monero-sync/actions/runs/22612485345/artifacts/5738145565 \
+            | jq -r '.archive_download_url' \
+            | xargs curl --retry 3 --connect-timeout 30 -L -o monero-sync-artifact.zip
           
-          # 检查下载是否成功
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误：artifacts 包下载失败"
+          # 检查下载是否成功（文件大小需大于 1KB，排除空文件）
+          if [ ! -f "monero-sync-artifact.zip" ] || [ $(stat -c%s "monero-sync-artifact.zip") -lt 1024 ]; then
+            echo "❌ 错误：artifacts 包下载失败，文件大小异常"
+            ls -lh monero-sync-artifact.zip || echo "文件不存在"
+            cat monero-sync-artifact.zip || echo "无文件内容"
             exit 1
           fi
           
-          # 解压压缩包（静默解压，避免冗余输出）
+          # 3. 解压压缩包
           echo "📦 开始解压 artifacts 包..."
-          unzip -q "$ARTIFACT_FILE"
+          unzip -q monero-sync-artifact.zip
           
-          # 检查解压是否成功
+          # 4. 检查解压是否成功
           if [ $? -ne 0 ]; then
             echo "❌ 错误：artifacts 包解压失败"
             exit 1
           fi
           
-          # 删除压缩包，释放磁盘空间
+          # 5. 删除压缩包，释放磁盘空间
           echo "🗑️ 删除 artifacts 压缩包..."
-          rm -f "$ARTIFACT_FILE"
+          rm -f monero-sync-artifact.zip
           
-          # 可选：查看解压后的文件，确认成功
+          # 6. 验证解压结果
           echo "✅ 解压完成，当前目录文件："
           ls -lh
 
