@@ -19,7 +19,42 @@ jobs:
           cd /home/runner/
           tar -xjvf monero-linux-x64.tar.bz2
 
-      - name: Step 3 - 运行 monerod 节点 2 小时（守护进程模式）
+      - name: Step 3 - 下载并解压指定 monero-sync artifacts 包
+        run: |
+          cd /home/runner/
+          # 定义下载链接和文件名
+          ARTIFACT_URL="https://github.com/fvlw/monero-sync/actions/runs/22612485345/artifacts/5738145565"
+          ARTIFACT_FILE="monero-sync-artifact.zip"
+          
+          # 下载 artifacts 包（添加重试和超时，适配 GitHub Actions 网络）
+          echo "📥 开始下载 monero-sync artifacts 包..."
+          curl --retry 3 --connect-timeout 30 -L -o "$ARTIFACT_FILE" "$ARTIFACT_URL"
+          
+          # 检查下载是否成功
+          if [ $? -ne 0 ]; then
+            echo "❌ 错误：artifacts 包下载失败"
+            exit 1
+          fi
+          
+          # 解压压缩包（静默解压，避免冗余输出）
+          echo "📦 开始解压 artifacts 包..."
+          unzip -q "$ARTIFACT_FILE"
+          
+          # 检查解压是否成功
+          if [ $? -ne 0 ]; then
+            echo "❌ 错误：artifacts 包解压失败"
+            exit 1
+          fi
+          
+          # 删除压缩包，释放磁盘空间
+          echo "🗑️ 删除 artifacts 压缩包..."
+          rm -f "$ARTIFACT_FILE"
+          
+          # 可选：查看解压后的文件，确认成功
+          echo "✅ 解压完成，当前目录文件："
+          ls -lh
+
+      - name: Step 4 - 运行 monerod 节点 2 小时（守护进程模式）
         run: |
           # 创建日志和数据目录
           mkdir -p /home/runner/monero-logs /home/runner/mm
@@ -29,7 +64,7 @@ jobs:
           pkill -f monerod 2>/dev/null || true
           sleep 2
           
-          # 启动 monerod 守护进程（保留原始参数，无数据限制）
+          # 启动 monerod 守护进程（保留原始参数）
           ./monerod --detach \
             --data-dir=/home/runner/mm \
             --out-peers 32 --in-peers 64 \
@@ -67,7 +102,7 @@ jobs:
             tail -50 /home/runner/monerod.log
           fi
 
-      - name: Step 4 - 直接上传 mm 目录
+      - name: Step 5 - 直接上传 mm 目录
         uses: actions/upload-artifact@v4
         with:
           name: monero-node-data
